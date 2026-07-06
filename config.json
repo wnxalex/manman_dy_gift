@@ -13,7 +13,7 @@
   "bgm_shuffle": true,
   "combo_window_seconds": 1,
   "max_queue": 60,
-  "volume": 1.0,
+  "volume": 1,
   "bgm_volume": 0.55,
-  "log_all_messages": false
+  "log_all_messages": true
 }

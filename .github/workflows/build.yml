@@ -1,26 +1,14 @@
-name: Build GiftDJ
+name: Build Windows EXE
 
-# 触发方式：
-#  1) 在 GitHub 仓库 Actions 页点 "Run workflow" 手动触发
-#  2) 打 tag（如 git tag v1.0 && git push --tags）自动触发
+# 推送到 master 分支时自动触发；也可在 Actions 页手动 Run
 on:
-  workflow_dispatch:
   push:
-    tags: ['v*']
+    branches: [master]
+  workflow_dispatch:
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            sep: ';'
-            artifact: GiftDJ-Windows
-          - os: macos-latest
-            sep: ':'
-            artifact: GiftDJ-macOS
-    runs-on: ${{ matrix.os }}
+  build-windows:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +20,7 @@ jobs:
         with:
           node-version: '20'
 
-      # 签名算法运行需要 jsrsasign，用 package.json 重新装，避免依赖仓库里提交的 node_modules
+      # 签名算法运行需要 jsrsasign，用 package.json 重新装
       - name: Install JS deps (jsrsasign)
         shell: bash
         run: npm install --no-audit --no-fund
@@ -47,9 +35,9 @@ jobs:
         shell: bash
         run: |
           pyinstaller --noconfirm --clean --onefile --name GiftDJ \
-            --add-data "static${{ matrix.sep }}static" \
-            --add-data "node_modules${{ matrix.sep }}node_modules" \
-            --add-data "webui${{ matrix.sep }}webui" \
+            --add-data "static;static" \
+            --add-data "node_modules;node_modules" \
+            --add-data "webui;webui" \
             --hidden-import pygame \
             --hidden-import websocket \
             --hidden-import static.Live_pb2 \
@@ -58,16 +46,12 @@ jobs:
             --hidden-import builder.auth \
             gift_dj.py
 
-      - name: Assemble dist (bundle node + blank config + folders)
+      - name: Assemble dist (bundle node.exe + blank config + folders)
         shell: bash
         run: |
-          # 附带 node 运行时（抖音签名算法要靠它执行 JS）
+          # 附带 node.exe 运行时（抖音签名算法要靠它执行 JS）
           NODE_DIR="$(dirname "$(command -v node)")"
-          if [ -f "$NODE_DIR/node.exe" ]; then
-            cp "$NODE_DIR/node.exe" dist/
-          else
-            cp "$(command -v node)" dist/ || true
-          fi
+          cp "$NODE_DIR/node.exe" dist/ 2>/dev/null || cp "$(command -v node)" dist/ || true
           # 生成干净的空白 config.json（绝不打包任何人的 cookie）
           python -c "import json; open('dist/config.json','w',encoding='utf-8').write(json.dumps({'live_id':'','cookie':'','gift_songs':{},'bgm_list':[],'bgm_enabled':True,'bgm_shuffle':False,'combo_window_seconds':8,'max_queue':5,'volume':0.9,'bgm_volume':0.4,'log_all_messages':True}, ensure_ascii=False, indent=2))"
           mkdir -p dist/songs dist/bgm
@@ -78,6 +62,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: GiftDJ-Windows
           path: dist
           retention-days: 30
