@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>抖音礼物点歌机 · 控制台</title>
+<style>
+  :root{--bg:#0f1115;--card:#181b22;--card2:#20242e;--line:#2c313c;--fg:#e8eaed;--mut:#9aa2af;--acc:#ff2d55;--acc2:#00d4aa;--ok:#22c55e;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"Microsoft YaHei",Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--line);background:#12141a;position:sticky;top:0;z-index:5}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  .dot{width:9px;height:9px;border-radius:50%;background:#555;display:inline-block}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .pill{font-size:12px;color:var(--mut);background:var(--card2);padding:3px 10px;border-radius:20px}
+  .wrap{max-width:1080px;margin:0 auto;padding:18px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .card.full{grid-column:1/3}
+  .card h2{font-size:14px;margin:0 0 12px;font-weight:600;display:flex;align-items:center;gap:8px}
+  .card h2 small{color:var(--mut);font-weight:400;font-size:12px}
+  label{display:block;color:var(--mut);font-size:12px;margin:10px 0 4px}
+  input[type=text],input[type=number],textarea,select{width:100%;background:var(--card2);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit}
+  textarea{resize:vertical;min-height:60px}
+  button{background:var(--card2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:7px 14px;cursor:pointer;font-size:13px}
+  button:hover{border-color:#3a4150}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+  button.go{background:var(--ok);border-color:var(--ok);color:#04210f;font-weight:700}
+  button.stop{background:#3a1f24;border-color:var(--acc);color:#ff9aa9}
+  button.mini{padding:3px 8px;font-size:12px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th,td{text-align:left;padding:6px 6px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--mut);font-weight:500}
+  .chip{display:inline-block;background:var(--card2);border:1px solid var(--line);border-radius:16px;padding:3px 10px;margin:3px 4px 0 0;cursor:pointer;font-size:12px}
+  .chip:hover{border-color:var(--acc)}
+  .chip b{color:var(--acc2)}
+  .files li{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .files{list-style:none;padding:0;margin:6px 0 0;max-height:180px;overflow:auto}
+  ul.files li span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:75%}
+  #log{background:#0a0c10;border:1px solid var(--line);border-radius:8px;height:260px;overflow:auto;padding:10px;font:12px/1.6 ui-monospace,Menlo,Consolas,monospace;color:#cbd3df;white-space:pre-wrap}
+  .muted{color:var(--mut);font-size:12px}
+  .hintbox{background:#1a1d24;border:1px dashed var(--line);border-radius:8px;padding:10px;font-size:12px;color:var(--mut);margin-top:8px}
+  .switch{display:flex;align-items:center;gap:8px;margin-top:10px}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#2a2f3a;border:1px solid var(--line);padding:10px 18px;border-radius:10px;opacity:0;transition:.3s;pointer-events:none}
+  .toast.show{opacity:1}
+  @media(max-width:820px){.wrap{grid-template-columns:1fr}.card.full{grid-column:auto}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎶 抖音礼物点歌机</h1>
+  <span class="dot" id="dot"></span>
+  <span class="pill" id="statusText">未启动</span>
+  <span class="pill" id="nowPlaying"></span>
+  <div style="flex:1"></div>
+  <button class="go" id="btnStart" onclick="startEngine()">▶ 启动监听</button>
+  <button class="stop" id="btnStop" onclick="stopEngine()">■ 停止</button>
+</header>
+
+<div class="wrap">
+
+  <!-- 直播间设置 -->
+  <div class="card">
+    <h2>① 直播间设置</h2>
+    <label>直播间号 live_id <small>（网址 live.douyin.com/ 后面的数字）</small></label>
+    <input type="text" id="live_id" placeholder="例如 571821134948">
+    <label>Cookie <small>（登录 live.douyin.com 后 F12 复制，很长）</small></label>
+    <textarea id="cookie" placeholder="粘贴整串 cookie..."></textarea>
+    <div class="hintbox">修改直播间号或 cookie 后，需点右上角「停止」再「启动」才生效。cookie 失效后重新复制即可。</div>
+    <div class="row" style="margin-top:10px"><button class="primary" onclick="saveConfig()">💾 保存设置</button></div>
+  </div>
+
+  <!-- 播放设置 -->
+  <div class="card">
+    <h2>② 播放设置</h2>
+    <label>礼物歌音量：<span id="volLabel"></span></label>
+    <input type="range" id="volume" min="0" max="1" step="0.05" oninput="volLabel.textContent=this.value">
+    <label>背景音乐 BGM 音量：<span id="bgmVolLabel"></span></label>
+    <input type="range" id="bgm_volume" min="0" max="1" step="0.05" oninput="bgmVolLabel.textContent=this.value">
+    <div class="row" style="margin-top:12px">
+      <div style="flex:1"><label>连击窗口(秒) <small>同一人连刷只算一次</small></label>
+        <input type="number" id="combo_window_seconds" min="1" max="60"></div>
+      <div style="flex:1"><label>队列上限</label>
+        <input type="number" id="max_queue" min="1" max="30"></div>
+    </div>
+    <div class="switch"><input type="checkbox" id="log_all_messages"><label style="margin:0">同时显示弹幕消息</label></div>
+    <div class="row" style="margin-top:12px"><button class="primary" onclick="saveConfig()">💾 保存设置</button></div>
+  </div>
+
+  <!-- 礼物点歌 -->
+  <div class="card full">
+    <h2>③ 礼物 → 歌曲 <small>收到该礼物就播放对应歌曲</small></h2>
+    <table id="giftTable">
+      <thead><tr><th style="width:32%">礼物名</th><th>歌曲</th><th style="width:60px"></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="row" style="margin-top:10px">
+      <input list="giftOptions" id="newGift" placeholder="礼物名，可下拉选或手输" style="max-width:220px">
+      <datalist id="giftOptions"></datalist>
+      <select id="newSong" style="max-width:260px"></select>
+      <button onclick="addGiftRow()">＋ 添加映射</button>
+      <span class="muted">没有歌？先在下面上传 →</span>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <label style="margin:0">上传点歌用的歌曲：</label>
+      <input type="file" id="songUpload" accept="audio/*" multiple>
+      <button onclick="uploadFiles('song','songUpload')">⬆ 上传到歌曲库</button>
+    </div>
+
+    <div id="detectedBox" style="margin-top:12px;display:none">
+      <div class="muted">直播间刚识别到的礼物（点一下自动填到上面礼物名框）：</div>
+      <div id="detectedChips"></div>
+    </div>
+  </div>
+
+  <!-- 试听 / 音量调试 -->
+  <div class="card full">
+    <h2>🎧 试听 / 音量调试 <small>无需启动监听，直接测试能否播放、并调好音量</small></h2>
+    <div class="row">
+      <select id="testFile" style="max-width:340px"></select>
+      <button class="go" onclick="testPlay()">▶ 试听</button>
+      <button class="stop" onclick="testStop()">■ 停止</button>
+    </div>
+    <label style="margin-top:14px">试听音量：<span id="testVolLabel">0.90</span></label>
+    <input type="range" id="testVol" min="0" max="1" step="0.05" value="0.9"
+           oninput="testVolLabel.textContent=parseFloat(this.value).toFixed(2)">
+    <div class="row" style="margin-top:12px">
+      <button class="mini" onclick="testWith('volume')">用「礼物歌音量」试听</button>
+      <button class="mini" onclick="testWith('bgm_volume')">用「BGM音量」试听</button>
+      <span class="muted">← 一键套用当前设置的音量，边听边调，满意后到②里保存</span>
+    </div>
+    <div class="hintbox">试听为最高优先级，会临时打断正在播放的 BGM/点歌；点「停止」即结束。听不到声音先检查系统音量和外放设备。</div>
+  </div>
+
+  <!-- BGM -->
+  <div class="card">
+    <h2>④ 背景音乐 BGM <small>空闲时循环播放，礼物歌优先</small></h2>
+    <div class="switch"><input type="checkbox" id="bgm_enabled"><label style="margin:0">启用 BGM</label>
+      <span style="width:16px"></span>
+      <input type="checkbox" id="bgm_shuffle"><label style="margin:0">随机顺序</label></div>
+    <div class="row" style="margin-top:10px">
+      <input type="file" id="bgmUpload" accept="audio/*" multiple>
+      <button onclick="uploadFiles('bgm','bgmUpload')">⬆ 上传 BGM（可多选）</button>
+    </div>
+    <div class="muted" style="margin-top:8px">BGM 播放列表（勾选加入循环）：</div>
+    <ul class="files" id="bgmList"></ul>
+    <div class="row"><button class="primary" onclick="saveConfig()">💾 保存 BGM 设置</button></div>
+  </div>
+
+  <!-- 实时日志 -->
+  <div class="card">
+    <h2>⑤ 实时日志 <small id="queueInfo"></small></h2>
+    <div id="log"></div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let CFG = {}, SONGS = [], BGMFILES = [];
+
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800);}
+async function api(path,opt){const r=await fetch(path,opt);return r.json();}
+
+async function loadConfig(){
+  CFG = await api('/api/config');
+  SONGS = CFG._songs||[]; BGMFILES = CFG._bgm_files||[];
+  live_id.value = CFG.live_id||'';
+  cookie.value = CFG.cookie||'';
+  volume.value = CFG.volume; volLabel.textContent = CFG.volume;
+  bgm_volume.value = CFG.bgm_volume; bgmVolLabel.textContent = CFG.bgm_volume;
+  combo_window_seconds.value = CFG.combo_window_seconds;
+  max_queue.value = CFG.max_queue;
+  log_all_messages.checked = !!CFG.log_all_messages;
+  bgm_enabled.checked = !!CFG.bgm_enabled;
+  bgm_shuffle.checked = !!CFG.bgm_shuffle;
+  // 礼物候选
+  const dl = document.getElementById('giftOptions');
+  dl.innerHTML = (CFG._common_gifts||[]).map(g=>`<option value="${g}">`).join('');
+  renderSongSelect(); renderGiftTable(); renderBgmList();
+}
+
+function renderSongSelect(){
+  const sel = document.getElementById('newSong');
+  sel.innerHTML = SONGS.length ? SONGS.map(s=>`<option value="${s}">${s.replace('songs/','')}</option>`).join('')
+                               : '<option value="">（歌曲库为空，请先上传）</option>';
+  renderTestSelect();
+}
+
+function renderTestSelect(){
+  const sel = document.getElementById('testFile');
+  let html='';
+  if(SONGS.length) html += '<optgroup label="点歌歌曲">'+SONGS.map(s=>`<option value="${s}">${s.replace('songs/','')}</option>`).join('')+'</optgroup>';
+  if(BGMFILES.length) html += '<optgroup label="背景音乐 BGM">'+BGMFILES.map(s=>`<option value="${s}">${s.replace('bgm/','')}</option>`).join('')+'</optgroup>';
+  sel.innerHTML = html || '<option value="">（还没有任何歌曲，请先在下方上传）</option>';
+}
+
+function renderGiftTable(){
+  const tb = document.querySelector('#giftTable tbody');
+  const entries = Object.entries(CFG.gift_songs||{});
+  tb.innerHTML = entries.length ? '' : '<tr><td colspan="3" class="muted">还没有配置，添加一条 →</td></tr>';
+  for(const [gift,song] of entries){
+    const tr=document.createElement('tr');
+    const opts = SONGS.map(s=>`<option value="${s}" ${s===song?'selected':''}>${s.replace('songs/','')}</option>`).join('');
+    tr.innerHTML = `<td><b>${gift}</b></td>
+      <td><select onchange="CFG.gift_songs['${gift.replace(/'/g,"\\'")}']=this.value">${opts}</select></td>
+      <td><button class="mini" onclick="delGift('${gift.replace(/'/g,"\\'")}')">删除</button></td>`;
+    tb.appendChild(tr);
+  }
+}
+function addGiftRow(){
+  const g = newGift.value.trim(), s = newSong.value;
+  if(!g){toast('请填礼物名');return;}
+  if(!s){toast('请先上传并选择歌曲');return;}
+  CFG.gift_songs = CFG.gift_songs||{}; CFG.gift_songs[g]=s;
+  newGift.value=''; renderGiftTable(); saveConfig();
+}
+function delGift(g){delete CFG.gift_songs[g];renderGiftTable();saveConfig();}
+
+function renderBgmList(){
+  const ul = document.getElementById('bgmList');
+  const chosen = new Set(CFG.bgm_list||[]);
+  ul.innerHTML = BGMFILES.length ? '' : '<li class="muted">BGM 库为空，请上传</li>';
+  for(const f of BGMFILES){
+    const li=document.createElement('li');
+    li.innerHTML = `<span><input type="checkbox" ${chosen.has(f)?'checked':''} onchange="toggleBgm('${f}',this.checked)"> ${f.replace('bgm/','')}</span>
+      <button class="mini" onclick="delFile('${f}','bgm')">删除</button>`;
+    ul.appendChild(li);
+  }
+}
+function toggleBgm(f,on){
+  let list = new Set(CFG.bgm_list||[]);
+  on?list.add(f):list.delete(f);
+  CFG.bgm_list=[...list];
+}
+
+async function uploadFiles(kind,inputId){
+  const inp=document.getElementById(inputId);
+  if(!inp.files.length){toast('请先选择文件');return;}
+  const fd=new FormData();
+  for(const f of inp.files) fd.append('files',f);
+  toast('上传中...');
+  const r=await api('/api/upload/'+kind,{method:'POST',body:fd});
+  inp.value='';
+  await loadConfig();
+  toast('已上传 '+(r.saved||[]).length+' 个文件');
+}
+async function delFile(path,kind){
+  if(!confirm('确认删除 '+path+' ?'))return;
+  await api('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
+  // 同时从选择/映射里移除
+  CFG.bgm_list=(CFG.bgm_list||[]).filter(x=>x!==path);
+  for(const g in (CFG.gift_songs||{})) if(CFG.gift_songs[g]===path) delete CFG.gift_songs[g];
+  await saveConfigSilent(); await loadConfig(); toast('已删除');
+}
+
+// ---- 试听 / 音量调试 ----
+async function testPlay(vol){
+  const path = document.getElementById('testFile').value;
+  if(!path){toast('请先选择要试听的歌曲');return;}
+  if(vol===undefined) vol=parseFloat(document.getElementById('testVol').value);
+  const r=await api('/api/test/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,volume:vol})});
+  toast(r.message||'');
+}
+async function testStop(){const r=await api('/api/test/stop',{method:'POST'});toast(r.message||'已停止');}
+function testWith(which){
+  const v = which==='bgm_volume' ? parseFloat(bgm_volume.value) : parseFloat(volume.value);
+  const slider=document.getElementById('testVol');
+  slider.value=v; document.getElementById('testVolLabel').textContent=v.toFixed(2);
+  testPlay(v);
+}
+
+function collect(){
+  CFG.live_id=live_id.value.trim();
+  CFG.cookie=cookie.value.trim();
+  CFG.volume=parseFloat(volume.value);
+  CFG.bgm_volume=parseFloat(bgm_volume.value);
+  CFG.combo_window_seconds=parseInt(combo_window_seconds.value)||8;
+  CFG.max_queue=parseInt(max_queue.value)||5;
+  CFG.log_all_messages=log_all_messages.checked;
+  CFG.bgm_enabled=bgm_enabled.checked;
+  CFG.bgm_shuffle=bgm_shuffle.checked;
+}
+async function saveConfigSilent(){collect();const p={...CFG};delete p._songs;delete p._bgm_files;delete p._common_gifts;
+  await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});}
+async function saveConfig(){await saveConfigSilent();toast('已保存 ✓');}
+
+async function startEngine(){collect();await saveConfigSilent();const r=await api('/api/start',{method:'POST'});toast(r.message);}
+async function stopEngine(){const r=await api('/api/stop',{method:'POST'});toast(r.message);}
+
+async function poll(){
+  try{
+    const s = await api('/api/status');
+    document.getElementById('dot').className='dot'+(s.running?' on':'');
+    document.getElementById('statusText').textContent=s.status;
+    document.getElementById('nowPlaying').textContent = s.now_playing?('♪ '+s.now_playing):'';
+    document.getElementById('queueInfo').textContent = s.queue?('排队 '+s.queue+' 首'):'';
+    const log=document.getElementById('log');
+    const atBottom = log.scrollHeight-log.scrollTop-log.clientHeight < 40;
+    log.textContent = (s.logs||[]).join('\n');
+    if(atBottom) log.scrollTop=log.scrollHeight;
+    // 已识别礼物
+    const box=document.getElementById('detectedBox'), chips=document.getElementById('detectedChips');
+    if(s.detected && s.detected.length){
+      box.style.display='block';
+      chips.innerHTML=s.detected.map(d=>`<span class="chip" onclick="pickGift('${d.name.replace(/'/g,"\\'")}')">${d.name} <b>x${d.count}</b></span>`).join('');
+    }
+  }catch(e){}
+}
+function pickGift(name){newGift.value=name;newGift.focus();toast('已填入：'+name);}
+
+loadConfig();
+setInterval(poll,1500); poll();
+</script>
+</body>
+</html>
