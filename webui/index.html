@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>抖音礼物点歌机 · 控制台</title>
+<title>漫漫专属礼物点歌机 · 控制台</title>
 <style>
   :root{--bg:#0f1115;--card:#181b22;--card2:#20242e;--line:#2c313c;--fg:#e8eaed;--mut:#9aa2af;--acc:#ff2d55;--acc2:#00d4aa;--ok:#22c55e;}
   *{box-sizing:border-box}
@@ -48,7 +48,7 @@
 </head>
 <body>
 <header>
-  <h1>🎶 抖音礼物点歌机</h1>
+  <h1>🎶 漫漫专属礼物点歌机</h1>
   <span class="dot" id="dot"></span>
   <span class="pill" id="statusText">未启动</span>
   <span class="pill" id="nowPlaying"></span>
@@ -73,10 +73,12 @@
   <!-- 播放设置 -->
   <div class="card">
     <h2>② 播放设置</h2>
-    <label>礼物歌音量：<span id="volLabel"></span></label>
-    <input type="range" id="volume" min="0" max="1" step="0.05" oninput="volLabel.textContent=this.value">
-    <label>背景音乐 BGM 音量：<span id="bgmVolLabel"></span></label>
-    <input type="range" id="bgm_volume" min="0" max="1" step="0.05" oninput="bgmVolLabel.textContent=this.value">
+    <label>礼物歌音量：<span id="volLabel"></span> <small>拖动即时生效</small></label>
+    <input type="range" id="volume" min="0" max="1" step="0.05"
+           oninput="liveVolume('gift',this,false)" onchange="liveVolume('gift',this,true)">
+    <label>背景音乐 BGM 音量：<span id="bgmVolLabel"></span> <small>拖动即时生效</small></label>
+    <input type="range" id="bgm_volume" min="0" max="1" step="0.05"
+           oninput="liveVolume('bgm',this,false)" onchange="liveVolume('bgm',this,true)">
     <div class="row" style="margin-top:12px">
       <div style="flex:1"><label>连击窗口(秒) <small>同一人连刷只算一次</small></label>
         <input type="number" id="combo_window_seconds" min="1" max="60"></div>
@@ -136,7 +138,18 @@
   <!-- BGM -->
   <div class="card">
     <h2>④ 背景音乐 BGM <small>空闲时循环播放，礼物歌优先</small></h2>
-    <div class="switch"><input type="checkbox" id="bgm_enabled"><label style="margin:0">启用 BGM</label>
+
+    <div id="bgmNow" style="background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:10px">
+      <div class="muted" style="font-size:12px">正在播放</div>
+      <div id="bgmNowText" style="font-size:15px;font-weight:600;margin-top:2px">—</div>
+    </div>
+    <div class="row">
+      <button id="btnBgmPause" onclick="bgmPause()">⏸ 暂停 BGM</button>
+      <button onclick="bgmSkip()">⏭ 下一首 BGM（切歌）</button>
+    </div>
+    <div class="muted" style="margin-top:6px">暂停/切歌只作用于 BGM；观众点的歌始终完整播放。</div>
+
+    <div class="switch" style="margin-top:12px"><input type="checkbox" id="bgm_enabled"><label style="margin:0">启用 BGM</label>
       <span style="width:16px"></span>
       <input type="checkbox" id="bgm_shuffle"><label style="margin:0">随机顺序</label></div>
     <div class="row" style="margin-top:10px">
@@ -148,9 +161,23 @@
     <div class="row"><button class="primary" onclick="saveConfig()">💾 保存 BGM 设置</button></div>
   </div>
 
-  <!-- 实时日志 -->
+  <!-- 播放队列 -->
   <div class="card">
-    <h2>⑤ 实时日志 <small id="queueInfo"></small></h2>
+    <h2>⑤ 播放队列 <small>观众点的歌在排队，按顺序播放</small></h2>
+    <div class="row" style="margin-bottom:8px">
+      <button class="stop" onclick="clearQueue()">🗑 清空队列</button>
+      <span style="flex:1"></span>
+      <span class="muted">字体</span>
+      <button class="mini" onclick="queueFont(-2)">A-</button>
+      <button class="mini" onclick="queueFont(2)">A+</button>
+      <a class="chip" href="/obs" target="_blank" title="用于 OBS 浏览器源">🖥 打开大屏展示页</a>
+    </div>
+    <ol id="queueList" style="list-style:decimal;margin:0;padding-left:26px"></ol>
+  </div>
+
+  <!-- 实时日志 -->
+  <div class="card full">
+    <h2>⑥ 实时日志 <small id="queueInfo"></small></h2>
     <div id="log"></div>
   </div>
 
@@ -225,8 +252,12 @@ function renderBgmList(){
   ul.innerHTML = BGMFILES.length ? '' : '<li class="muted">BGM 库为空，请上传</li>';
   for(const f of BGMFILES){
     const li=document.createElement('li');
-    li.innerHTML = `<span><input type="checkbox" ${chosen.has(f)?'checked':''} onchange="toggleBgm('${f}',this.checked)"> ${f.replace('bgm/','')}</span>
-      <button class="mini" onclick="delFile('${f}','bgm')">删除</button>`;
+    const fj=f.replace(/'/g,"\\'");
+    li.innerHTML = `<span><input type="checkbox" ${chosen.has(f)?'checked':''} onchange="toggleBgm('${fj}',this.checked)"> ${f.replace('bgm/','')}</span>
+      <span style="display:flex;gap:6px">
+        <button class="mini" onclick="bgmPlayFile('${fj}')" title="立即切到这首">▶ 切到这首</button>
+        <button class="mini" onclick="delFile('${fj}','bgm')">删除</button>
+      </span>`;
     ul.appendChild(li);
   }
 }
@@ -234,6 +265,10 @@ function toggleBgm(f,on){
   let list = new Set(CFG.bgm_list||[]);
   on?list.add(f):list.delete(f);
   CFG.bgm_list=[...list];
+}
+async function bgmPlayFile(path){
+  const r=await api('/api/bgm/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
+  toast(r.message||'');
 }
 
 async function uploadFiles(kind,inputId){
@@ -290,6 +325,26 @@ async function saveConfig(){await saveConfigSilent();toast('已保存 ✓');}
 async function startEngine(){collect();await saveConfigSilent();const r=await api('/api/start',{method:'POST'});toast(r.message);}
 async function stopEngine(){const r=await api('/api/stop',{method:'POST'});toast(r.message);}
 
+// ---- 实时音量（拖动即生效；松手时持久化到 config） ----
+function liveVolume(kind, el, save){
+  const v = parseFloat(el.value);
+  (kind==='gift'?volLabel:bgmVolLabel).textContent = v.toFixed(2);
+  if(kind==='gift') CFG.volume=v; else CFG.bgm_volume=v;
+  api('/api/volume',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({kind, value:v, save:!!save})});
+}
+// ---- BGM 播放控制 ----
+async function bgmPause(){const r=await api('/api/bgm/pause',{method:'POST'});toast(r.message);}
+async function bgmSkip(){const r=await api('/api/bgm/skip',{method:'POST'});toast(r.message);}
+// ---- 队列管理 ----
+async function clearQueue(){if(!confirm('确认清空当前播放队列？'))return;const r=await api('/api/queue/clear',{method:'POST'});toast(r.message);poll();}
+async function removeQueue(i){await api('/api/queue/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:i})});poll();}
+// ---- 队列字体大小（记忆在本机浏览器） ----
+let QFONT = parseInt(localStorage.getItem('gdj_qfont')||'15');
+function applyQueueFont(){document.getElementById('queueList').style.fontSize=QFONT+'px';}
+function queueFont(d){QFONT=Math.max(11,Math.min(40,QFONT+d));localStorage.setItem('gdj_qfont',QFONT);applyQueueFont();}
+
+const KINDTAG={bgm:'🎵 BGM',gift:'🎁 点歌',test:'🎧 试听'};
 async function poll(){
   try{
     const s = await api('/api/status');
@@ -297,6 +352,23 @@ async function poll(){
     document.getElementById('statusText').textContent=s.status;
     document.getElementById('nowPlaying').textContent = s.now_playing?('♪ '+s.now_playing):'';
     document.getElementById('queueInfo').textContent = s.queue?('排队 '+s.queue+' 首'):'';
+    // 正在播放（BGM 卡片）
+    const nt=document.getElementById('bgmNowText');
+    if(s.now_playing){
+      const tag=KINDTAG[s.now_playing_kind]||'';
+      const paused=(s.now_playing_kind==='bgm'&&s.bgm_paused)?'（已暂停）':'';
+      nt.textContent=`${tag}  ${s.now_playing}${paused}`+(s.now_playing_reason?`  ·  ${s.now_playing_reason}`:'');
+    }else{nt.textContent='—';}
+    document.getElementById('btnBgmPause').textContent = s.bgm_paused?'▶ 继续 BGM':'⏸ 暂停 BGM';
+    // 播放队列
+    const ql=document.getElementById('queueList');
+    const items=s.queue_list||[];
+    ql.innerHTML = items.length ? items.map((it,i)=>
+      `<li style="padding:3px 0;display:flex;align-items:center;gap:8px">
+         <span style="flex:1">${it.song}${it.reason?` <span class="muted">· ${it.reason}</span>`:''}</span>
+         <button class="mini" onclick="removeQueue(${i})">删除</button>
+       </li>`).join('')
+      : '<div class="muted" style="padding:4px 0">队列空。收到点歌礼物会出现在这里。</div>';
     const log=document.getElementById('log');
     const atBottom = log.scrollHeight-log.scrollTop-log.clientHeight < 40;
     log.textContent = (s.logs||[]).join('\n');
@@ -311,6 +383,7 @@ async function poll(){
 }
 function pickGift(name){newGift.value=name;newGift.focus();toast('已填入：'+name);}
 
+applyQueueFont();
 loadConfig();
 setInterval(poll,1500); poll();
 </script>

@@ -8,3 +8,26 @@ wheels/
 
 # Virtual environments
 .venv
+venv/
+*.spec
+
+# Node 依赖（CI 会用 npm install 自动重装；本地已装的可保留不受影响）
+node_modules/
+
+# 本地配置：含 cookie，切勿提交到仓库（尤其是公开仓库！）
+config.json
+
+# 音频文件（不必进仓库；若想随包一起分发可删掉下面几行）
+songs/*.mp3
+songs/*.wav
+songs/*.ogg
+songs/*.flac
+songs/*.m4a
+bgm/*.mp3
+bgm/*.wav
+bgm/*.ogg
+bgm/*.flac
+bgm/*.m4a
+
+# 系统杂项
+.DS_Store

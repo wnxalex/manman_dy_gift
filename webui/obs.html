@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>点歌大屏 · OBS</title>
+<style>
+  /* 背景透明，方便作为 OBS 浏览器源叠加到直播画面上；
+     若要单独全屏看，加 ?bg=1 会显示深色背景 */
+  html,body{margin:0;height:100%;background:transparent;color:#fff;
+    font-family:-apple-system,"Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+    text-shadow:0 2px 6px rgba(0,0,0,.85);}
+  body.solid{background:#0d0f14;}
+  .wrap{padding:28px;box-sizing:border-box}
+  .now{display:flex;align-items:center;gap:16px;margin-bottom:22px}
+  .now .icon{font-size:44px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.6))}
+  .now .meta{min-width:0}
+  .now .label{font-size:18px;opacity:.8;letter-spacing:2px}
+  .now .title{font-size:var(--nowsize,40px);font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .now .sub{font-size:20px;opacity:.85;margin-top:2px}
+  .qhead{font-size:20px;opacity:.8;letter-spacing:2px;margin:0 0 10px;border-left:5px solid #ff2d55;padding-left:10px}
+  ol.q{list-style:none;margin:0;padding:0}
+  ol.q li{display:flex;align-items:center;gap:14px;padding:8px 0;font-size:var(--qsize,30px);font-weight:600}
+  ol.q li .n{display:inline-flex;justify-content:center;align-items:center;min-width:1.6em;height:1.6em;
+    background:#ff2d55;border-radius:10px;font-size:.7em;font-weight:800}
+  ol.q li .who{font-size:.66em;opacity:.8;font-weight:500}
+  .empty{opacity:.6;font-size:24px}
+  .paused{color:#ffd23f}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="now">
+    <div class="icon" id="icon">🎵</div>
+    <div class="meta">
+      <div class="label">正在播放</div>
+      <div class="title" id="title">—</div>
+      <div class="sub" id="sub"></div>
+    </div>
+  </div>
+  <div class="qhead">播放队列</div>
+  <ol class="q" id="queue"></ol>
+</div>
+<script>
+  // URL 参数：?bg=1 深色背景；?nowsize=48 主标题字号；?qsize=34 队列字号
+  const P=new URLSearchParams(location.search);
+  if(P.get('bg')==='1') document.body.classList.add('solid');
+  if(P.get('nowsize')) document.documentElement.style.setProperty('--nowsize',P.get('nowsize')+'px');
+  if(P.get('qsize'))   document.documentElement.style.setProperty('--qsize',P.get('qsize')+'px');
+  const ICON={bgm:'🎵',gift:'🎁',test:'🎧'};
+  async function tick(){
+    try{
+      const s=await (await fetch('/api/status')).json();
+      document.getElementById('icon').textContent = ICON[s.now_playing_kind]||'🎵';
+      const t=document.getElementById('title');
+      if(s.now_playing){
+        const paused=(s.now_playing_kind==='bgm'&&s.bgm_paused);
+        t.innerHTML = s.now_playing + (paused?' <span class="paused">⏸</span>':'');
+        document.getElementById('sub').textContent = s.now_playing_reason||'';
+      }else{ t.textContent='—'; document.getElementById('sub').textContent=''; }
+      const q=document.getElementById('queue');
+      const items=s.queue_list||[];
+      q.innerHTML = items.length ? items.map((it,i)=>
+        `<li><span class="n">${i+1}</span><span>${it.song}${it.reason?` <span class="who">· ${it.reason}</span>`:''}</span></li>`).join('')
+        : '<div class="empty">暂无排队</div>';
+    }catch(e){}
+  }
+  setInterval(tick,1200); tick();
+</script>
+</body>
+</html>

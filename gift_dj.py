@@ -90,14 +90,31 @@ def resolve(path):
 
 # ==================== 播放引擎 ====================
 class Player(threading.Thread):
-    """单声道播放：礼物歌优先排队；空闲时循环 BGM，礼物来了立刻打断 BGM，礼物播完恢复 BGM。"""
+    """单声道 tick 式播放引擎。
+    优先级：试听 > 点歌(礼物歌) > BGM。
+    - 点歌歌曲始终完整播放，不受暂停/切歌影响；礼物来了会打断正在放的 BGM。
+    - 暂停/切歌 仅作用于 BGM。
+    - 点歌队列可查看、单条删除、清空。
+    """
+    KIND_TAG = {'bgm': 'BGM', 'gift': '点歌', 'test': '试听'}
+
     def __init__(self, engine):
         super().__init__(daemon=True)
         self.engine = engine
-        self.gift_q = queue.Queue()
         self._bgm_idx = 0
-        self.now_playing = ''
-        self._test = None                 # 试听请求 (path, volume)，最高优先级
+        # 当前播放 {'path','kind','reason'} 或 None
+        self.current = None
+        self.now_playing = ''            # 当前曲名（basename），兼容旧状态
+        # 点歌队列（用 list 便于查看/删除）
+        self._giftq = []
+        self._qlock = threading.Lock()
+        # BGM 控制
+        self.bgm_paused = False
+        self._paused_applied = False
+        self._skip_bgm = False
+        self._bgm_jump = None            # 点选切歌：待切到的指定 BGM 路径
+        # 试听
+        self._test = None
         self._test_lock = threading.Lock()
         try:
             import pygame
@@ -107,17 +124,68 @@ class Player(threading.Thread):
             self.pg = None
             engine.log(f'[音频] 初始化失败：{e}（BGM/播放不可用）')
 
+    # ---------- 点歌队列 ----------
     def enqueue_gift(self, song_path, reason):
-        cfg = self.engine.cfg
-        if self.gift_q.qsize() >= int(cfg.get('max_queue', 5)):
-            self.engine.log(f'[点歌] 队列已满，忽略：{os.path.basename(song_path)}')
-            return
-        self.gift_q.put((song_path, reason))
-        self.engine.log(f'[点歌] {reason} → 入队（排队 {self.gift_q.qsize()} 首）')
+        with self._qlock:
+            if len(self._giftq) >= int(self.engine.cfg.get('max_queue', 5)):
+                self.engine.log(f'[点歌] 队列已满，忽略：{os.path.basename(song_path)}')
+                return
+            self._giftq.append((song_path, reason))
+            n = len(self._giftq)
+        self.engine.log(f'[点歌] {reason} → 入队（排队 {n} 首）')
 
-    # ---- 试听 / 音量调试 ----
+    def _pop_gift(self):
+        with self._qlock:
+            return self._giftq.pop(0) if self._giftq else None
+
+    def _giftq_has(self):
+        with self._qlock:
+            return len(self._giftq) > 0
+
+    def queue_snapshot(self):
+        with self._qlock:
+            return [{'song': os.path.basename(p), 'reason': r} for p, r in self._giftq]
+
+    def clear_queue(self):
+        with self._qlock:
+            n = len(self._giftq)
+            self._giftq.clear()
+        self.engine.log(f'[点歌] 已清空队列（{n} 首）')
+        return n
+
+    def remove_queue(self, index):
+        with self._qlock:
+            if 0 <= index < len(self._giftq):
+                p, r = self._giftq.pop(index)
+                self.engine.log(f'[点歌] 已移除排队：{os.path.basename(p)}')
+                return True
+        return False
+
+    # ---------- BGM 控制（仅作用于 BGM） ----------
+    def toggle_bgm_pause(self):
+        self.bgm_paused = not self.bgm_paused
+        self.engine.log('[BGM] ' + ('已暂停' if self.bgm_paused else '已继续'))
+        return self.bgm_paused
+
+    def skip_bgm(self):
+        self._skip_bgm = True
+        self.engine.log('[BGM] 切到下一首')
+
+    def play_bgm(self, path):
+        """点选切歌：立即切到指定的 BGM 曲目（点歌/试听播放中则等其结束后再切）。"""
+        self._bgm_jump = path
+        self.engine.log(f'[BGM] 切到指定曲目：{os.path.basename(path)}')
+
+    def _sync_bgm_idx(self, path):
+        """把顺序播放指针对齐到 path 之后，保证之后的自动轮播衔接自然。"""
+        lst = [resolve(p) for p in self.engine.cfg.get('bgm_list', [])]
+        try:
+            self._bgm_idx = lst.index(path) + 1
+        except ValueError:
+            pass
+
+    # ---------- 试听 ----------
     def play_test(self, path, volume):
-        """请求试听：设为最高优先级，会打断当前正在播放的 BGM 或礼物歌。"""
         with self._test_lock:
             self._test = (path, float(volume))
 
@@ -127,42 +195,39 @@ class Player(threading.Thread):
             return t
 
     def stop_current(self):
-        """停止当前播放（用于停止试听）。"""
+        """停止当前试听。"""
         with self._test_lock:
             self._test = None
-        try:
-            if self.pg:
+        if self.current and self.current.get('kind') == 'test':
+            try:
                 self.pg.mixer.music.stop()
-        except Exception:
-            pass
+            except Exception:
+                pass
+            self.current = None
+            self.now_playing = ''
 
-    def _play_blocking(self, path, volume, interruptible, kind='song'):
+    # ---------- 内部：起播 ----------
+    def _start(self, path, volume, kind, reason=''):
         pg = self.pg
         if not os.path.exists(path):
             self.engine.log(f'[播放] 文件不存在：{path}')
+            self.current = None
+            self.now_playing = ''
             return
         try:
             pg.mixer.music.load(path)
             pg.mixer.music.set_volume(float(volume))
             pg.mixer.music.play()
-            self.now_playing = os.path.basename(path)
-            while pg.mixer.music.get_busy():
-                time.sleep(0.2)
-                # 试听请求优先级最高，可打断任何正在播放的内容（含礼物歌）
-                if kind != 'test' and self._test is not None:
-                    pg.mixer.music.stop()
-                    break
-                if interruptible and not self.gift_q.empty():
-                    pg.mixer.music.stop()
-                    break
-            try:
-                pg.mixer.music.unload()
-            except Exception:
-                pass
         except Exception as e:
-            self.engine.log(f'[播放] 出错 {os.path.basename(path)}: {e}')
-        finally:
+            self.engine.log(f'[播放] 打开失败 {os.path.basename(path)}: {e}')
+            self.current = None
             self.now_playing = ''
+            return
+        self.current = {'path': path, 'kind': kind, 'reason': reason}
+        self.now_playing = os.path.basename(path)
+        self._paused_applied = False
+        tag = self.KIND_TAG.get(kind, '')
+        self.engine.log(f'[播放] ♪ {tag} {os.path.basename(path)}' + (f'（{reason}）' if reason else ''))
 
     def _next_bgm(self):
         cfg = self.engine.cfg
@@ -176,28 +241,116 @@ class Player(threading.Thread):
         self._bgm_idx += 1
         return path
 
+    # ---------- 主循环（tick） ----------
     def run(self):
         if not self.pg:
             return
         while True:
-            cfg = self.engine.cfg
-            test = self._pop_test()
-            if test:
-                path, vol = test
-                self.engine.log(f'[试听] ♪ {os.path.basename(path)}（音量 {vol:.2f}）')
-                self._play_blocking(path, vol, interruptible=False, kind='test')
-            elif not self.gift_q.empty():
-                path, reason = self.gift_q.get()
-                self.engine.log(f'[播放] ♪ {os.path.basename(path)}（{reason}）')
-                self._play_blocking(path, cfg.get('volume', 0.9), interruptible=False)
-            elif cfg.get('bgm_enabled') and cfg.get('bgm_list'):
-                path = self._next_bgm()
-                if path:
-                    self._play_blocking(path, cfg.get('bgm_volume', 0.4), interruptible=True)
-                else:
-                    time.sleep(0.3)
+            try:
+                self._tick()
+            except Exception as e:
+                self.engine.log(f'[播放] 循环异常：{e}')
+            time.sleep(0.2)
+
+    def _tick(self):
+        pg = self.pg
+        cfg = self.engine.cfg
+
+        # 1) 试听请求：最高优先级，打断一切
+        test = self._pop_test()
+        if test:
+            try:
+                pg.mixer.music.stop()
+            except Exception:
+                pass
+            self._start(test[0], test[1], 'test')
+            return
+
+        cur = self.current
+
+        # 2) 判断当前是否自然播完（BGM 暂停时 get_busy 为 False，不算播完）
+        if cur:
+            paused = (cur['kind'] == 'bgm' and self.bgm_paused)
+            if not pg.mixer.music.get_busy() and not paused:
+                self.current = None
+                self.now_playing = ''
+                cur = None
+
+        # 2.5) 点选切歌：立即切到指定 BGM（仅在放 BGM 或空闲时生效；点歌/试听中则保持挂起，等其结束）
+        if self._bgm_jump and (cur is None or cur['kind'] == 'bgm'):
+            path = self._bgm_jump
+            self._bgm_jump = None
+            self.bgm_paused = False
+            self._paused_applied = False
+            try:
+                pg.mixer.music.stop()
+            except Exception:
+                pass
+            if os.path.exists(path):
+                self._sync_bgm_idx(path)
+                self._start(path, cfg.get('bgm_volume', 0.4), 'bgm')
             else:
-                time.sleep(0.3)
+                self.engine.log(f'[BGM] 文件不存在：{path}')
+                self.current = None
+                self.now_playing = ''
+            return
+
+        # 3) 若正在放 BGM：处理 暂停/继续、切歌、被点歌打断
+        if cur and cur['kind'] == 'bgm':
+            if self.bgm_paused and not self._paused_applied:
+                try:
+                    pg.mixer.music.pause()
+                except Exception:
+                    pass
+                self._paused_applied = True
+            elif not self.bgm_paused and self._paused_applied:
+                try:
+                    pg.mixer.music.unpause()
+                except Exception:
+                    pass
+                self._paused_applied = False
+            if self._skip_bgm:
+                self._skip_bgm = False
+                try:
+                    pg.mixer.music.stop()
+                except Exception:
+                    pass
+                self.current = None
+                self.now_playing = ''
+                cur = None
+            elif self._giftq_has():
+                # 点歌优先，打断 BGM（无论是否暂停）
+                try:
+                    pg.mixer.music.stop()
+                except Exception:
+                    pass
+                self.current = None
+                self.now_playing = ''
+                cur = None
+
+        # 切歌标志只对 BGM 有效；当前不是 BGM 时丢弃，避免误触发后续 BGM
+        if self._skip_bgm and (not self.current or self.current.get('kind') != 'bgm'):
+            self._skip_bgm = False
+
+        # 4) 空闲则挑下一首：点歌优先，其次 BGM（未暂停时）
+        if not self.current:
+            nxt = self._pop_gift()
+            if nxt:
+                self._start(nxt[0], cfg.get('volume', 0.9), 'gift', nxt[1])
+            elif cfg.get('bgm_enabled') and cfg.get('bgm_list') and not self.bgm_paused:
+                p = self._next_bgm()
+                if p:
+                    self._start(p, cfg.get('bgm_volume', 0.4), 'bgm')
+
+        # 5) 音量热更新（跟随设置实时生效）
+        if self.current and not self._paused_applied:
+            try:
+                if self.current['kind'] == 'gift':
+                    pg.mixer.music.set_volume(float(cfg.get('volume', 0.9)))
+                elif self.current['kind'] == 'bgm':
+                    pg.mixer.music.set_volume(float(cfg.get('bgm_volume', 0.4)))
+            except Exception:
+                pass
 
 
 # ==================== 引擎（监听 + 状态） ====================
@@ -493,14 +646,79 @@ def api_test_stop():
     return jsonify(ok=True, message='已停止试听')
 
 
+@app.route('/api/bgm/pause', methods=['POST'])
+def api_bgm_pause():
+    paused = ENGINE.player.toggle_bgm_pause()
+    return jsonify(ok=True, paused=paused, message='BGM 已暂停' if paused else 'BGM 已继续')
+
+
+@app.route('/api/bgm/skip', methods=['POST'])
+def api_bgm_skip():
+    ENGINE.player.skip_bgm()
+    return jsonify(ok=True, message='已切到下一首 BGM')
+
+
+@app.route('/api/bgm/play', methods=['POST'])
+def api_bgm_play():
+    rel = request.get_json(force=True).get('path', '')
+    if not rel:
+        return jsonify(ok=False, message='未选择曲目')
+    p = resolve(rel)
+    if not os.path.exists(p):
+        return jsonify(ok=False, message='文件不存在：' + rel)
+    ENGINE.player.play_bgm(p)
+    return jsonify(ok=True, message=f'切到：{os.path.basename(p)}')
+
+
+@app.route('/api/volume', methods=['POST'])
+def api_volume():
+    """实时设置音量：拖动即生效（tick 每次读取 cfg）；save=true 时才写入 config.json 持久化。"""
+    data = request.get_json(force=True)
+    kind = data.get('kind')
+    key = 'volume' if kind == 'gift' else 'bgm_volume' if kind == 'bgm' else None
+    if key is None:
+        return jsonify(ok=False, message='kind 需为 gift 或 bgm')
+    try:
+        val = max(0.0, min(1.0, float(data.get('value'))))
+    except Exception:
+        return jsonify(ok=False, message='value 不合法')
+    ENGINE.cfg[key] = val
+    if data.get('save'):
+        save_config({k: v for k, v in ENGINE.cfg.items() if not k.startswith('_')})
+    return jsonify(ok=True, key=key, value=val)
+
+
+@app.route('/api/queue/clear', methods=['POST'])
+def api_queue_clear():
+    n = ENGINE.player.clear_queue()
+    return jsonify(ok=True, message=f'已清空 {n} 首')
+
+
+@app.route('/api/queue/remove', methods=['POST'])
+def api_queue_remove():
+    idx = request.get_json(force=True).get('index', -1)
+    ok = ENGINE.player.remove_queue(int(idx))
+    return jsonify(ok=ok, message='已移除' if ok else '移除失败（可能已开始播放）')
+
+
+@app.route('/obs')
+def obs_page():
+    return send_from_directory(WEBUI_DIR, 'obs.html')
+
+
 @app.route('/api/status')
 def api_status():
     det = sorted(ENGINE.detected.items(), key=lambda kv: -kv[1]['count'])
+    cur = ENGINE.player.current or {}
     return jsonify(
         running=ENGINE.running,
         status=ENGINE.status_msg,
         now_playing=ENGINE.player.now_playing,
-        queue=ENGINE.player.gift_q.qsize(),
+        now_playing_kind=cur.get('kind', ''),
+        now_playing_reason=cur.get('reason', ''),
+        bgm_paused=ENGINE.player.bgm_paused,
+        queue=len(ENGINE.player.queue_snapshot()),
+        queue_list=ENGINE.player.queue_snapshot(),
         logs=ENGINE.logs()[-120:],
         detected=[{'name': n, 'count': d['count'], 'last': d.get('last', '')} for n, d in det[:30]],
     )

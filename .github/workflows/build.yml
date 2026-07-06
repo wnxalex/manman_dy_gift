@@ -1,0 +1,83 @@
+name: Build GiftDJ
+
+# 触发方式：
+#  1) 在 GitHub 仓库 Actions 页点 "Run workflow" 手动触发
+#  2) 打 tag（如 git tag v1.0 && git push --tags）自动触发
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            sep: ';'
+            artifact: GiftDJ-Windows
+          - os: macos-latest
+            sep: ':'
+            artifact: GiftDJ-macOS
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 签名算法运行需要 jsrsasign，用 package.json 重新装，避免依赖仓库里提交的 node_modules
+      - name: Install JS deps (jsrsasign)
+        shell: bash
+        run: npm install --no-audit --no-fund
+
+      - name: Install Python deps
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --clean --onefile --name GiftDJ \
+            --add-data "static${{ matrix.sep }}static" \
+            --add-data "node_modules${{ matrix.sep }}node_modules" \
+            --add-data "webui${{ matrix.sep }}webui" \
+            --hidden-import pygame \
+            --hidden-import websocket \
+            --hidden-import static.Live_pb2 \
+            --hidden-import static.Response_pb2 \
+            --hidden-import dy_apis.douyin_api \
+            --hidden-import builder.auth \
+            gift_dj.py
+
+      - name: Assemble dist (bundle node + blank config + folders)
+        shell: bash
+        run: |
+          # 附带 node 运行时（抖音签名算法要靠它执行 JS）
+          NODE_DIR="$(dirname "$(command -v node)")"
+          if [ -f "$NODE_DIR/node.exe" ]; then
+            cp "$NODE_DIR/node.exe" dist/
+          else
+            cp "$(command -v node)" dist/ || true
+          fi
+          # 生成干净的空白 config.json（绝不打包任何人的 cookie）
+          python -c "import json; open('dist/config.json','w',encoding='utf-8').write(json.dumps({'live_id':'','cookie':'','gift_songs':{},'bgm_list':[],'bgm_enabled':True,'bgm_shuffle':False,'combo_window_seconds':8,'max_queue':5,'volume':0.9,'bgm_volume':0.4,'log_all_messages':True}, ensure_ascii=False, indent=2))"
+          mkdir -p dist/songs dist/bgm
+          echo "把点歌用的 mp3 放这里（也可在网页里上传）" > "dist/songs/说明.txt"
+          echo "把背景音乐 mp3 放这里（也可在网页里上传）" > "dist/bgm/说明.txt"
+          cp 使用说明.md dist/ 2>/dev/null || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist
+          retention-days: 30
